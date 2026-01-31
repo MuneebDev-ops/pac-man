@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pac-Man Game</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:Arial,sans-serif;}
+body{display:flex;justify-content:center;align-items:center;height:100vh;background:#000;color:#fff;overflow:hidden;}
+.wrapper{display:flex;flex-direction:column;align-items:center;gap:10px;}
+#game{display:grid;grid-template-columns:repeat(20,24px);grid-template-rows:repeat(20,24px);border:4px solid #fff;background:#111;position:relative;}
+.wall{background:#222;}
+.dot{background:#ffd700;border-radius:50%;animation:blink 1s infinite alternate;}
+.power{background:#0ff;border-radius:50%;animation:blink 0.5s infinite alternate;}
+.speed{background:#f0f;border-radius:50%;animation:blink 0.5s infinite alternate;}
+.freeze{background:#0f0;border-radius:50%;animation:blink 0.5s infinite alternate;}
+.pacman{background:yellow;border-radius:50%;animation:chomp 0.3s infinite alternate;}
+.ghost{background:red;border-radius:50%;transition:all 0.2s;}
+@keyframes blink{0%{opacity:1}100%{opacity:0.3}}
+@keyframes chomp{0%{clip-path:polygon(50% 50%, 0% 0%, 100% 0%, 100% 100%, 0% 100%);}50%{clip-path:polygon(50% 50%, 0% 0%, 100% 0%, 100% 100%, 0% 100%);}}
+.hud{margin-top:10px;font-size:16px;font-weight:bold;display:flex;gap:15px;}
+.controls{display:flex;gap:10px;margin-top:10px;}
+.touchBtn{padding:10px 20px;border-radius:10px;background:rgba(255,255,255,0.1);border:2px solid #fff;color:white;font-weight:bold;cursor:pointer;user-select:none;}
+.touchBtn:active{transform:scale(0.95);}
+.btn{margin-top:10px;padding:10px 20px;border-radius:10px;background:#0ff;color:#000;font-weight:bold;border:none;cursor:pointer;}
+.overlay{position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.9);display:flex;flex-direction:column;justify-content:center;align-items:center;color:white;font-size:24px;z-index:10;}
+.overlay button{margin-top:20px;padding:10px 20px;font-size:18px;}
+</style>
+</head>
+<body>
+<div class="wrapper">
+  <div id="game"></div>
+  <div class="hud">
+    <div id="score">Score: 0</div>
+    <div id="level">Level: 1</div>
+    <div id="best">Best: 0</div>
+  </div>
+  <div class="controls">
+    <div class="touchBtn" id="upBtn">⬆️</div>
+    <div class="touchBtn" id="leftBtn">⬅️</div>
+    <div class="touchBtn" id="downBtn">⬇️</div>
+    <div class="touchBtn" id="rightBtn">➡️</div>
+  </div>
+  <button class="btn" id="pauseBtn">Pause / Resume</button>
+</div>
+
+<div class="overlay" id="startScreen">
+  <div>Ultimate Pac-Man</div>
+  <button id="startBtn">Start Game</button>
+</div>
+<div class="overlay" id="endScreen" style="display:none;">
+  <div id="endMessage"></div>
+  <button id="restartBtn">Restart</button>
+</div>
+
+<script>
+// === Variables ===
+const game=document.getElementById("game");
+const scoreEl=document.getElementById("score");
+const levelEl=document.getElementById("level");
+const bestEl=document.getElementById("best");
+const pauseBtn=document.getElementById("pauseBtn");
+const startScreen=document.getElementById("startScreen");
+const startBtn=document.getElementById("startBtn");
+const endScreen=document.getElementById("endScreen");
+const endMessage=document.getElementById("endMessage");
+const restartBtn=document.getElementById("restartBtn");
+
+const rows=20,cols=20;
+let map=[],pac={x:1,y:1},ghosts=[],score=0,level=1,bestScore=parseInt(localStorage.getItem("bestScore"))||0;
+let dir={x:0,y:0},power={eatGhost:false,speed:false,freeze:false},powerTimer=0,gamePaused=false;
+let gameInterval;
+
+// === Audio ===
+const audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+function beep(freq,dur,type,vol){ const osc=audioCtx.createOscillator(); const gain=audioCtx.createGain(); osc.type=type; osc.frequency.value=freq; gain.gain.value=vol; osc.connect(gain); gain.connect(audioCtx.destination); osc.start(); osc.stop(audioCtx.currentTime+dur); }
+// background music
+let bgMusic=null;
+function startMusic(){ bgMusic=audioCtx.createOscillator(); const gain=audioCtx.createGain(); bgMusic.frequency.value=220; bgMusic.type="sine"; gain.gain.value=0.02; bgMusic.connect(gain); gain.connect(audioCtx.destination); bgMusic.start();}
+function stopMusic(){ if(bgMusic){bgMusic.stop(); bgMusic=null;}}
+
+// === Maze Initialization ===
+function initMaze(){
+  map=[];
+  for(let i=0;i<rows;i++){
+    map[i]=[];
+    for(let j=0;j<cols;j++){
+      if(i===0||j===0||i===rows-1||j===cols-1||Math.random()<0.1+0.02*level) map[i][j]=1;
+      else map[i][j]=2;
+    }
+  }
+  pac={x:1,y:1}; map[pac.y][pac.x]=3;
+  ghosts=[{x:cols-2,y:rows-2},{x:cols-2,y:1},{x:1,y:rows-2}];
+  ghosts.forEach(g=>map[g.y][g.x]=4);
+  // power-ups
+  const types=['power','speed','freeze'];
+  for(let t=0;t<types.length;t++){
+    let px=Math.floor(Math.random()*(cols-2))+1,py=Math.floor(Math.random()*(rows-2))+1;
+    if(map[py][px]===2) map[py][px]=5+t;
+  }
+}
+
+// === Draw Map ===
+function drawMap(){
+  game.innerHTML="";
+  for(let i=0;i<rows;i++){
+    for(let j=0;j<cols;j++){
+      let cell=document.createElement("div");
+      if(map[i][j]===1) cell.classList.add("wall");
+      else if(map[i][j]===2) cell.classList.add("dot");
+      else if(map[i][j]===3) cell.classList.add("pacman");
+      else if(map[i][j]===4) cell.classList.add("ghost");
+      else if(map[i][j]===5) cell.classList.add("power");
+      else if(map[i][j]===6) cell.classList.add("speed");
+      else if(map[i][j]===7) cell.classList.add("freeze");
+      game.appendChild(cell);
+    }
+  }
+  scoreEl.innerText="Score: "+score;
+  levelEl.innerText="Level: "+level;
+  bestEl.innerText="Best: "+bestScore;
+}
+
+// === Pac-Man Move ===
+function movePac(){
+  if(gamePaused) return;
+  let nx=pac.x+dir.x,ny=pac.y+dir.y;
+  if(map[ny][nx]!==1){
+    if(map[ny][nx]===2){score+=10; beep(600,0.05,"square",0.05);}
+    if(map[ny][nx]>=5){
+      switch(map[ny][nx]){
+        case 5: power.eatGhost=true; beep(880,0.1,"sine",0.05); break;
+        case 6: power.speed=true; beep(1000,0.1,"triangle",0.05); break;
+        case 7: power.freeze=true; beep(1200,0.1,"sawtooth",0.05); break;
+      }
+      powerTimer=50;
+    }
+    pac.x=nx; pac.y=ny;
+  }
+}
+
+// === Ghost AI ===
+function moveGhosts(){
+  ghosts.forEach(g=>{
+    let mx=0,my=0;
+    if(power.freeze){mx=0;my=0;} 
+    else{
+      let dx=pac.x-g.x, dy=pac.y-g.y;
+      if(Math.random()<0.7){mx=dx!==0?dx/Math.abs(dx):0;my=dy!==0?dy/Math.abs(dy):0;}
+      else { mx=0; my=0; } // small random pause
+    }
+    let nx=g.x+mx,ny=g.y+my;
+    if(map[ny][nx]!==1){g.x=nx; g.y=ny;}
+    if(g.x===pac.x&&g.y===pac.y){ 
+      if(power.eatGhost){score+=100; g.x=cols-2; g.y=rows-2; beep(1500,0.1,"sine",0.05);} 
+      else endGame(); 
+    }
+  });
+}
+
+// === Game Loop ===
+function gameLoop(){
+  if(gamePaused) return;
+  let speedFactor=power.speed?2:1;
+  for(let s=0;s<speedFactor;s++){
+    movePac(); moveGhosts();
+    if(power.eatGhost||power.speed||power.freeze){powerTimer--; if(powerTimer<=0){power={eatGhost:false,speed:false,freeze:false}; powerTimer=0;}}
+  }
+  for(let i=0;i<rows;i++) for(let j=0;j<cols;j++) if(map[i][j]===3||map[i][j]===4) map[i][j]=0;
+  map[pac.y][pac.x]=3; ghosts.forEach(g=>map[g.y][g.x]=4);
+  drawMap();
+  if(!map.flat().includes(2)) winLevel();
+}
+
+// === Level / Win / End ===
+function winLevel(){level++; if(level>5){winGame(); return;} initMaze(); dir={x:0,y:0}; beep(700,0.1,"square");}
+function endGame(){stopMusic(); clearInterval(gameInterval); endMessage.innerText="Game Over!\nScore: "+score; endScreen.style.display="flex"; if(score>bestScore){bestScore=score; localStorage.setItem("bestScore",bestScore);}}
+function winGame(){stopMusic(); clearInterval(gameInterval); endMessage.innerText="You Win! Score: "+score; endScreen.style.display="flex"; if(score>bestScore){bestScore=score; localStorage.setItem("bestScore",bestScore);}}
+
+// === Controls ===
+document.addEventListener("keydown",e=>{
+  if(e.key==="ArrowUp") dir={x:0,y:-1};
+  if(e.key==="ArrowDown") dir={x:0,y:1};
+  if(e.key==="ArrowLeft") dir={x:-1,y:0};
+  if(e.key==="ArrowRight") dir={x:1,y:0};
+});
+document.getElementById("upBtn").addEventListener("touchstart",()=>dir={x:0,y:-1});
+document.getElementById("downBtn").addEventListener("touchstart",()=>dir={x:0,y:1});
+document.getElementById("leftBtn").addEventListener("touchstart",()=>dir={x:-1,y:0});
+document.getElementById("rightBtn").addEventListener("touchstart",()=>dir={x:1,y:0});
+pauseBtn.addEventListener("click",()=>{gamePaused=!gamePaused;});
+
+// === Start / Restart ===
+startBtn.addEventListener("click",()=>{
+  startScreen.style.display="none";
+  score=0; level=1; initMaze(); drawMap();
+  startMusic();
+  gameInterval=setInterval(gameLoop,200);
+});
+restartBtn.addEventListener("click",()=>{
+  endScreen.style.display="none";
+  score=0; level=1; initMaze(); drawMap();
+  startMusic();
+  gameInterval=setInterval(gameLoop,200);
+});
+</script>
+</body>
+</html>
